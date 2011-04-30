@@ -1,0 +1,8 @@
+; $Id$
+
+name = Mass editor prices
+description = Mass editor prices for Ubercart.
+core = 6.x
+version = 6.x-0.2
+dependencies[] = uc_product
+package = orangeudav

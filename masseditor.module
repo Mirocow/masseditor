@@ -1,0 +1,274 @@
+<?php
+
+function masseditor_menu() {
+  $items['admin/store/masseditor'] = array(
+    'title' => 'Mass editing prices',
+    'access arguments' => array('administer products'),
+    'page callback' => 'masseditor_page',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  
+  return $items;
+}
+
+function masseditor_page() {
+  $output = drupal_get_form('masseditor_settings_form');
+  $output .= drupal_get_form('masseditor_editor_form');
+  
+  return $output;
+}
+
+function _masseditor_default_settings() {
+  return array(
+    'model' => TRUE,
+    'title' => TRUE,
+    'list_price' => FALSE,
+    'cost' => FALSE,
+    'sell_price' => TRUE,
+    'weight' => FALSE,
+    'weight_units' => FALSE,
+    'length' => FALSE,
+    'width' => FALSE,
+    'height' => FALSE,
+    'length_units' => FALSE,
+    'pkg_qty' => FALSE,
+    'default_qty' => FALSE,
+    'crs_sell_price' => FALSE,
+    'crs_sell_price_cur' => FALSE,
+  );
+}
+
+function masseditor_settings_form(&$form_state = NULL) {
+  drupal_add_css(drupal_get_path('module', 'masseditor') . '/masseditor.css');
+  
+  $form['#tree'] = TRUE;
+  $form['#theme'] = 'masseditor_settings_form';
+  $form['fs'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Settings'),
+    '#collapsible' => FALSE, 
+    '#collapsed' => FALSE,
+  );
+  
+  $def_settings = _masseditor_default_settings();
+  $settings = variable_get('masseditor_settings', array());
+  foreach ($def_settings as $s_name => $s_value) {
+    if (!isset($settings[$s_name])) {
+      $settings[$s_name] = $s_value;
+    }
+  }
+  
+  $weight = 0;
+  foreach ($settings as $setting_name => $setting_status) {
+    $form['fs']['cb'][$setting_name] = array(
+      '#type' => 'checkbox',
+      '#title' => $setting_name,
+      '#default_value' => $setting_status,
+    );
+    $form['fs']['we'][$setting_name] = array(
+      '#type' => 'textfield',
+      '#default_value' => $weight,
+      '#size' => 2,
+    );
+    $weight++;
+  }
+  
+  $form['fs']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+  
+  return $form;
+}
+
+function masseditor_settings_form_submit($form, &$form_state) {
+  $new_settings = array();
+  $cb_list = $form_state['clicked_button']['#post']['fs']['we'];
+  foreach ($cb_list as $cb_name => $cb_old_order) {
+    $new_settings[$cb_name] = (boolean)$form_state['values']['fs']['cb'][$cb_name];
+  }
+  variable_set('masseditor_settings', $new_settings);
+}
+
+function masseditor_editor_form(&$form_state = NULL) {
+  drupal_add_css(drupal_get_path('module', 'masseditor') . '/masseditor.css');
+  
+  $form['#tree'] = TRUE;  
+  
+  $context = array(
+    'revision' => 'altered',
+    'cache' => FALSE,
+    'sign' => ' ',
+    'sign_after' => FALSE,
+    'dec' => ',',
+    'thou' => ' ',
+    'label' => FALSE,
+  );
+  $masseditor_settings = variable_get('masseditor_settings', _masseditor_default_settings());
+  
+  $dbr = db_query("SELECT nid FROM {uc_products} ORDER BY model ASC");
+  while ($data = db_fetch_object($dbr)) {
+    $node = node_load($data->nid);
+    
+    foreach ($masseditor_settings as $s_name => $s_value) {
+      if ($s_value) {
+        switch($s_name) {
+          case 'model':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '7',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+          case 'title':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '60',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+          case 'list_price':
+          case 'cost':
+          case 'sell_price':
+          case 'crs_sell_price':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '5',
+              '#default_value' => uc_price($node->$s_name, $context) ,
+            );
+            break;
+          case 'crs_sell_price_cur':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '3',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+          case 'weight':
+          case 'length':
+          case 'width':
+          case 'height':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '6',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+          case 'length_units':
+          case 'weight_units':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '2',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+          case 'pkg_qty':
+          case 'default_qty':
+            $form['p'][$node->nid][$s_name] = array(
+              '#type' => 'textfield',
+              '#size' => '5',
+              '#default_value' => $node->$s_name,
+            );
+            break;
+        }
+      }
+    }
+  }
+  
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => 'Save',
+  );
+  
+  return $form;
+}
+
+function masseditor_editor_form_submit($form, &$form_state) {
+  foreach ($form_state['values']['p'] as $nid => $data) {
+    $node = node_load($nid);
+    foreach ($data as $key => $value) {
+      $node->$key = $value;
+    }
+    
+    node_save($node);
+  } 
+}
+
+function masseditor_theme($existing, $type, $theme, $path) {
+  return array(
+    'masseditor_editor_form' => array(
+      'arguments' => array('form' => NULL),
+    ),
+    'masseditor_settings_form' => array(
+      'arguments' => array('form' => NULL),
+    ),
+  );
+}
+
+function theme_masseditor_editor_form($form) {  
+  $masseditor_settings = variable_get('masseditor_settings', _masseditor_default_settings());
+  
+  $header = array();
+  foreach ($masseditor_settings as $s_name => $s_value) {
+    if ($s_value) {
+      switch($s_name) {
+        case 'model': $header[] = t('SKU'); break;
+        case 'title': $header[] = t('Title'); break;
+        case 'list_price': $header[] = t('List price'); break;
+        case 'cost': $header[] = t('Cost'); break;
+        case 'sell_price': $header[] = t('Sell price'); break;
+        case 'weight': $header[] = t('Weight'); break;
+        case 'weight_units': $header[] = t('Weight units'); break;
+        case 'length': $header[] = t('Length'); break;
+        case 'width': $header[] = t('Width'); break;
+        case 'height': $header[] = t('Height'); break;
+        case 'length_units': $header[] = t('Length units'); break;
+        case 'pkg_qty': $header[] = t('Pkg qty'); break;
+        case 'default_qty': $header[] = t('Default qty'); break;
+      }
+    }
+  }
+  
+  $rows = array();
+  foreach (element_children($form['p']) as $nid) {
+    $row = array();
+    
+    foreach (element_children($form['p'][$nid]) as $s_name) {
+      if ($masseditor_settings[$s_name]) {
+        $row[] = drupal_render($form['p'][$nid][$s_name]);
+      }
+    }
+    
+    $rows[] = $row;
+  }
+  $table = theme('table', $header, $rows, array('class' => 'masseditor'));
+  
+  return $table . drupal_render($form);
+}
+
+function theme_masseditor_settings_form($form) {  
+  $header = array(t('Enabled'), t('Weight'));
+  
+  $rows = array();
+  foreach (element_children($form['fs']['cb']) as $element_name) {
+    $row = array();
+    
+    $row[] = drupal_render($form['fs']['cb'][$element_name]);
+    
+    $form['fs']['we'][$element_name]['#attributes']['class'] = 'we-weight';
+    $row[] = drupal_render($form['fs']['we'][$element_name]);
+    
+    $rows[] = array(
+      'data' => $row,
+      'class' => 'draggable',
+    );
+  }
+  drupal_add_tabledrag('settings-table', 'order', 'sibling', 'we-weight', NULL, NULL, TRUE, 0);
+  $table = theme('table', $header, $rows, array('id' => 'settings-table'));
+  
+  unset($form['fs']['we']);
+  unset($form['fs']['cb']);
+  $form['fs'] = array('table' => array('#value' => $table)) + $form['fs'];
+  
+  return drupal_render($form);
+}
