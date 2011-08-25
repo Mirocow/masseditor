@@ -1,21 +1,28 @@
 <?php
 
+// http://www.drupal.ru/node/52457
+
+function masseditor_perm() {
+  return array('administer UC mass editor', 'use UC mass editor');
+}
+
 function masseditor_menu() {
   $items['admin/store/masseditor'] = array(
     'title' => 'Mass editing prices',
-    'access arguments' => array('administer products'),
-    'page callback' => 'masseditor_page',
+    'access arguments' => array('use UC mass editor'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('masseditor_editor_form'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/store/settings/masseditor'] = array(
+    'title' => 'Mass editor settings',
+    'access arguments' => array('administer UC mass editor'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('masseditor_settings_form'),
     'type' => MENU_NORMAL_ITEM,
   );
   
   return $items;
-}
-
-function masseditor_page() {
-  $output = drupal_get_form('masseditor_settings_form');
-  $output .= drupal_get_form('masseditor_editor_form');
-  
-  return $output;
 }
 
 function _masseditor_default_settings() {
@@ -35,6 +42,12 @@ function _masseditor_default_settings() {
     'default_qty' => FALSE,
     'crs_sell_price' => FALSE,
     'crs_sell_price_cur' => FALSE,
+  );
+}
+
+function _masseditor_default_options() {
+  return array(
+    'per_page' => 50,
   );
 }
 
@@ -73,6 +86,17 @@ function masseditor_settings_form(&$form_state = NULL) {
     $weight++;
   }
   
+  $masseditor_options = variable_get('masseditor_options', _masseditor_default_options());
+
+  $form['fs']['opt']['per_page'] = array(
+      '#type' => 'textfield', 
+      '#title' => t('Items per page'), 
+      '#default_value' => $masseditor_options['per_page'], 
+      '#size' => 7, 
+      '#maxlength' => 2, 
+    );
+
+
   $form['fs']['submit'] = array(
     '#type' => 'submit',
     '#value' => t('Save'),
@@ -87,7 +111,9 @@ function masseditor_settings_form_submit($form, &$form_state) {
   foreach ($cb_list as $cb_name => $cb_old_order) {
     $new_settings[$cb_name] = (boolean)$form_state['values']['fs']['cb'][$cb_name];
   }
+  $masseditor_options['per_page'] = $form_state['values']['fs']['opt']['per_page'];
   variable_set('masseditor_settings', $new_settings);
+  variable_set('masseditor_options', $masseditor_options);
 }
 
 function masseditor_editor_form(&$form_state = NULL) {
@@ -105,8 +131,46 @@ function masseditor_editor_form(&$form_state = NULL) {
     'label' => FALSE,
   );
   $masseditor_settings = variable_get('masseditor_settings', _masseditor_default_settings());
-  
-  $dbr = db_query("SELECT nid FROM {uc_products} ORDER BY model ASC");
+  $masseditor_options = variable_get('masseditor_options', _masseditor_default_options());
+
+  // Fill filter options from pagers' $_GET values
+  if (isset($_GET['page']) && isset($_GET['filter']) && !isset($form_state['storage']['filter'])) {
+    $form_state['storage']['filter'] = $_GET['filter'];
+  }
+
+  $form['filter'] = array(
+      '#type' => 'fieldset', 
+      '#title' => t('Filter by category'), 
+  );
+
+  $form['filter']['category'] = _taxonomy_term_select(t('Catalog'), NULL, isset($form_state['storage']['filter']['category']) ? $form_state['storage']['filter']['category'] : array(), variable_get('uc_catalog_vid', NULL), t('Hold Ctrl while clicking to select multiple categories.'), true, 0);
+
+  $form['filter']['reset'] = array(
+      '#type' => 'button', 
+      '#value' => t('Reset'), 
+      '#validate' => array('masseditor_editor_form_reset'),
+  );
+
+  $form['filter']['filter'] = array(
+      '#type' => 'button', 
+      '#value' => t('Filter'), 
+      '#validate' => array('masseditor_editor_form_filter'),
+  );
+
+  // Collect TIDs to filter by
+  $filter_tids = array();
+  if (isset($form_state['storage']['filter']['category'])) {
+    foreach ($form_state['storage']['filter']['category'] as $tid) {
+      $filter_tids = array_merge($filter_tids, array($tid), array_keys(taxonomy_get_children($tid)));
+    }
+  }
+  $filter_tids = array_unique($filter_tids);
+
+  $dbr = pager_query("SELECT p.nid
+    FROM {uc_products} AS p " . 
+    (empty($filter_tids) ? "" : "LEFT JOIN {term_node} AS t ON (p.vid = t.vid) WHERE t.tid IN (" . implode(',', $filter_tids) . ") ") .
+    "ORDER BY model ASC", $masseditor_options['per_page']);
+
   while ($data = db_fetch_object($dbr)) {
     $node = node_load($data->nid);
     
@@ -116,7 +180,7 @@ function masseditor_editor_form(&$form_state = NULL) {
           case 'model':
             $form['p'][$node->nid][$s_name] = array(
               '#type' => 'textfield',
-              '#size' => '7',
+              '#size' => '15',
               '#default_value' => $node->$s_name,
             );
             break;
@@ -177,10 +241,19 @@ function masseditor_editor_form(&$form_state = NULL) {
   
   $form['submit'] = array(
     '#type' => 'submit',
-    '#value' => 'Save',
+    '#value' => t('Save'),
   );
   
   return $form;
+}
+
+function masseditor_editor_form_filter($form, &$form_state) {
+  $form_state['storage']['filter'] = $form_state['values']['filter'];
+}
+
+function masseditor_editor_form_reset($form, &$form_state) {
+  unset($form_state['storage']['filter']);
+  $form_state['rebuild'] = TRUE;
 }
 
 function masseditor_editor_form_submit($form, &$form_state) {
@@ -207,6 +280,7 @@ function masseditor_theme($existing, $type, $theme, $path) {
 
 function theme_masseditor_editor_form($form) {  
   $masseditor_settings = variable_get('masseditor_settings', _masseditor_default_settings());
+  $masseditor_options = variable_get('masseditor_options', _masseditor_default_options());
   
   $header = array();
   foreach ($masseditor_settings as $s_name => $s_value) {
@@ -242,8 +316,8 @@ function theme_masseditor_editor_form($form) {
     $rows[] = $row;
   }
   $table = theme('table', $header, $rows, array('class' => 'masseditor'));
-  
-  return $table . drupal_render($form);
+  $table .= theme('pager', NULL, $masseditor_options['per_page'], 0);
+  return drupal_render($form['filter']) . $table . drupal_render($form);
 }
 
 function theme_masseditor_settings_form($form) {  

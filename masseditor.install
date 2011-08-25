@@ -2,4 +2,5 @@
 
 function masseditor_uninstall() {
   variable_del('masseditor_settings');
+  variable_del('masseditor_options');
 }
