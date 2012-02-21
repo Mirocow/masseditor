@@ -70,7 +70,19 @@ function masseditor_settings_form(&$form_state = NULL) {
       $settings[$s_name] = $s_value;
     }
   }
-  
+
+  if (db_table_exists('content_node_field_instance')) {
+    $cck_settings = array();
+    $products_types = uc_product_types();
+    foreach($products_types as $products_type) {
+      $fields_query = db_query("select field_name from {content_node_field_instance} where type_name = '%s' and widget_type in ('text_textarea', 'text_textfield')", $products_type);
+      while($data = db_fetch_object($fields_query)) {
+        $cck_settings[$data->field_name] = FALSE;
+      }
+    }
+  }
+  $settings += $cck_settings;
+
   $weight = 0;
   foreach ($settings as $setting_name => $setting_status) {
     $form['fs']['cb'][$setting_name] = array(
@@ -173,7 +185,7 @@ function masseditor_editor_form(&$form_state = NULL) {
 
   while ($data = db_fetch_object($dbr)) {
     $node = node_load($data->nid);
-    
+
     foreach ($masseditor_settings as $s_name => $s_value) {
       if ($s_value) {
         switch($s_name) {
@@ -234,6 +246,32 @@ function masseditor_editor_form(&$form_state = NULL) {
               '#default_value' => $node->$s_name,
             );
             break;
+
+          default:
+            if (db_table_exists('content_node_field_instance')) {
+              $field_instance = db_fetch_object(db_query("select * from content_node_field_instance where field_name='%s' and type_name='%s'", $s_name, $node->type));
+              if (!empty($field_instance)) {
+                $field_instance->widget_settings = unserialize($field_instance->widget_settings);
+                $field_instance->display_settings = unserialize($field_instance->display_settings);
+
+                switch ($field_instance->widget_type) {
+                  case 'text_textarea':
+                    $form['p'][$node->nid][$s_name]['#type'] = 'textarea';
+                    $form['p'][$node->nid][$s_name]['#title'] = $s_name;
+                    $field = $node->$s_name;
+                    $form['p'][$node->nid][$s_name]['#default_value'] = $field[0]['value'];
+                    break;
+
+                  case 'text_textfield':
+                    $form['p'][$node->nid][$s_name]['#type'] = 'textfield';
+                    $form['p'][$node->nid][$s_name]['#title'] = $s_name;
+                    $field = $node->$s_name;
+                    $form['p'][$node->nid][$s_name]['#default_value'] = $field[0]['value'];
+                    break;
+                }
+              }
+            }
+            break;
         }
       }
     }
@@ -257,12 +295,31 @@ function masseditor_editor_form_reset($form, &$form_state) {
 }
 
 function masseditor_editor_form_submit($form, &$form_state) {
-  foreach ($form_state['values']['p'] as $nid => $data) {
+  $cck_enabled = db_table_exists('content_node_field_instance');
+  foreach ($form_state['values']['p'] as $nid => $form_data) {
     $node = node_load($nid);
-    foreach ($data as $key => $value) {
+    foreach ($form_data as $key => $value) {
       $node->$key = $value;
     }
-    
+
+    if ($cck_enabled) {
+      $fields_query = db_query("select field_name from {content_node_field_instance} where type_name = '%s'", $node->type);
+      $fields = array();
+      while($data = db_fetch_object($fields_query)) {
+        $fields[] = $data->field_name;
+      }
+
+      foreach ($fields as $field) {
+        if (array_key_exists($field, $form_data)) {
+          $node->$field = array(
+            0 => array(
+              'value' => $form_data[$field],
+            ),
+          );
+        }
+      }
+    }
+
     node_save($node);
   } 
 }
