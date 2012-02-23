@@ -2,6 +2,8 @@
 
 // http://www.drupal.ru/node/52457
 
+require_once 'masseditor.admin.inc';
+
 function masseditor_perm() {
   return array('administer UC mass editor', 'use UC mass editor');
 }
@@ -23,109 +25,6 @@ function masseditor_menu() {
   );
   
   return $items;
-}
-
-function _masseditor_default_settings() {
-  return array(
-    'model' => TRUE,
-    'title' => TRUE,
-    'list_price' => FALSE,
-    'cost' => FALSE,
-    'sell_price' => TRUE,
-    'weight' => FALSE,
-    'weight_units' => FALSE,
-    'length' => FALSE,
-    'width' => FALSE,
-    'height' => FALSE,
-    'length_units' => FALSE,
-    'pkg_qty' => FALSE,
-    'default_qty' => FALSE,
-    'crs_sell_price' => FALSE,
-    'crs_sell_price_cur' => FALSE,
-  );
-}
-
-function _masseditor_default_options() {
-  return array(
-    'per_page' => 50,
-  );
-}
-
-function masseditor_settings_form(&$form_state = NULL) {
-  drupal_add_css(drupal_get_path('module', 'masseditor') . '/masseditor.css');
-  
-  $form['#tree'] = TRUE;
-  $form['#theme'] = 'masseditor_settings_form';
-  $form['fs'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Settings'),
-    '#collapsible' => FALSE, 
-    '#collapsed' => FALSE,
-  );
-  
-  $def_settings = _masseditor_default_settings();
-  $settings = variable_get('masseditor_settings', array());
-  foreach ($def_settings as $s_name => $s_value) {
-    if (!isset($settings[$s_name])) {
-      $settings[$s_name] = $s_value;
-    }
-  }
-
-  if (db_table_exists('content_node_field_instance')) {
-    $cck_settings = array();
-    $products_types = uc_product_types();
-    foreach($products_types as $products_type) {
-      $fields_query = db_query("select field_name from {content_node_field_instance} where type_name = '%s' and widget_type in ('text_textarea', 'text_textfield')", $products_type);
-      while($data = db_fetch_object($fields_query)) {
-        $cck_settings[$data->field_name] = FALSE;
-      }
-    }
-  }
-  $settings += $cck_settings;
-
-  $weight = 0;
-  foreach ($settings as $setting_name => $setting_status) {
-    $form['fs']['cb'][$setting_name] = array(
-      '#type' => 'checkbox',
-      '#title' => $setting_name,
-      '#default_value' => $setting_status,
-    );
-    $form['fs']['we'][$setting_name] = array(
-      '#type' => 'textfield',
-      '#default_value' => $weight,
-      '#size' => 2,
-    );
-    $weight++;
-  }
-  
-  $masseditor_options = variable_get('masseditor_options', _masseditor_default_options());
-
-  $form['fs']['opt']['per_page'] = array(
-      '#type' => 'textfield', 
-      '#title' => t('Items per page'), 
-      '#default_value' => $masseditor_options['per_page'], 
-      '#size' => 7, 
-      '#maxlength' => 2, 
-    );
-
-
-  $form['fs']['submit'] = array(
-    '#type' => 'submit',
-    '#value' => t('Save'),
-  );
-  
-  return $form;
-}
-
-function masseditor_settings_form_submit($form, &$form_state) {
-  $new_settings = array();
-  $cb_list = $form_state['clicked_button']['#post']['fs']['we'];
-  foreach ($cb_list as $cb_name => $cb_old_order) {
-    $new_settings[$cb_name] = (boolean)$form_state['values']['fs']['cb'][$cb_name];
-  }
-  $masseditor_options['per_page'] = $form_state['values']['fs']['opt']['per_page'];
-  variable_set('masseditor_settings', $new_settings);
-  variable_set('masseditor_options', $masseditor_options);
 }
 
 function masseditor_editor_form(&$form_state = NULL) {
@@ -249,24 +148,46 @@ function masseditor_editor_form(&$form_state = NULL) {
 
           default:
             if (db_table_exists('content_node_field_instance')) {
+
+              $field = db_fetch_object(db_query("select * from content_node_field where field_name = '%s'", $s_name));
+              $field->global_settings = unserialize($field->global_settings);
+              $field->db_columns = unserialize($field->db_columns);
               $field_instance = db_fetch_object(db_query("select * from content_node_field_instance where field_name='%s' and type_name='%s'", $s_name, $node->type));
+
               if (!empty($field_instance)) {
                 $field_instance->widget_settings = unserialize($field_instance->widget_settings);
                 $field_instance->display_settings = unserialize($field_instance->display_settings);
 
+                $form['p'][$node->nid][$s_name]['#title'] = "{$field_instance->label}<br />{$s_name}";
+                $node_field = $node->$s_name;
+                $form['p'][$node->nid][$s_name]['#default_value'] = $node_field[0]['value'];
                 switch ($field_instance->widget_type) {
-                  case 'text_textarea':
-                    $form['p'][$node->nid][$s_name]['#type'] = 'textarea';
-                    $form['p'][$node->nid][$s_name]['#title'] = $s_name;
-                    $field = $node->$s_name;
-                    $form['p'][$node->nid][$s_name]['#default_value'] = $field[0]['value'];
-                    break;
+                  case 'text_textarea': $form['p'][$node->nid][$s_name]['#type'] = 'textarea'; break;
+                  case 'text_textfield': $form['p'][$node->nid][$s_name]['#type'] = 'textfield'; break;
+                  case 'optionwidgets_select':
+                    $form['p'][$node->nid][$s_name]['#type'] = 'select';
 
-                  case 'text_textfield':
-                    $form['p'][$node->nid][$s_name]['#type'] = 'textfield';
-                    $form['p'][$node->nid][$s_name]['#title'] = $s_name;
-                    $field = $node->$s_name;
-                    $form['p'][$node->nid][$s_name]['#default_value'] = $field[0]['value'];
+                    // OPTIONS
+                    $allowed_values = array();
+                    $_s = str_replace("\r\n", "\r", $field->global_settings['allowed_values']);
+                    $_s = str_replace("\n", "\r", $_s);
+                    foreach(explode("\r", $_s) as $arr) {
+                      $arr = explode("|", trim($arr));
+                      if (count($arr) == 1) {
+                        $allowed_values[trim($arr[0])] = trim($arr[0]);
+                      }
+                      elseif (count($arr) == 2) {
+                        $allowed_values[trim($arr[0])] = trim($arr[1]);
+                      }
+                    }
+                    $field->global_settings['allowed_values'] = $allowed_values;
+
+                    // NULL OPTION
+                    if (!$field->required) {
+                      $field->global_settings['allowed_values'] = array('!!!null' => '--') + $field->global_settings['allowed_values'];
+                    }
+
+                    $form['p'][$node->nid][$s_name]['#options'] = $field->global_settings['allowed_values'];
                     break;
                 }
               }
@@ -311,11 +232,12 @@ function masseditor_editor_form_submit($form, &$form_state) {
 
       foreach ($fields as $field) {
         if (array_key_exists($field, $form_data)) {
-          $node->$field = array(
-            0 => array(
-              'value' => $form_data[$field],
-            ),
-          );
+          if ($form_data[$field] == '!!!null') {
+            $node->$field = array(0 => array('value' => null));
+          }
+          else {
+            $node->$field = array(0 => array('value' => $form_data[$field]));
+          }
         }
       }
     }
